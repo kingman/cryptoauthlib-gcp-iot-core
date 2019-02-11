@@ -1,0 +1,3 @@
+google-api-python-client==1.7.8
+cryptoauthlib
+cryptography >= 2.3
