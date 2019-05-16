@@ -19,15 +19,16 @@ Usage example:
 python create_iot_core_device.py --service_account_json '/path/to/service_account' \
 --project project_id \
 --registry registry_id \
---region region \
---device device_id
+--region region
 """
 import argparse
-import base64
-from cryptoauthlib import *
+import sys
 from google.oauth2 import service_account
 from googleapiclient import discovery
-from googleapiclient.errors import HttpError
+
+from coral.cloudiot.ecc608 import ecc608_i2c_address
+from coral.cloudiot.ecc608 import ecc608_serial
+from coral.cloudiot.ecc608 import ecc608_public_key
 
 def _get_client(service_account_json):
     """Returns an authorized API client by discovering the IoT API and creating
@@ -52,7 +53,7 @@ def _get_client(service_account_json):
 
 def _create_es256_device(
         service_account_json, project_id, cloud_region, registry_id,
-        device_id, public_key):
+        device_info):
     """Create a new device with the given id, using ES256 for
     authentication."""
     # [START iot_create_es_device]
@@ -63,53 +64,26 @@ def _create_es256_device(
 
     # Note: You can have multiple credentials associated with a device.
     device_template = {
-        'id': device_id,
+        'id': device_info['device_id'],
         'credentials': [{
             'publicKey': {
                 'format': 'ES256_PEM',
-                'key': public_key
+                'key': device_info['pub_key']
             }
         }]
     }
 
     devices = client.projects().locations().registries().devices()
     return devices.create(parent=registry_name, body=device_template).execute()
-    # [END iot_create_es_device]
 
-def _get_hardware_publis_key():
-    ATCA_SUCCESS = 0x00
-
-    # Loading cryptoauthlib(python specific)
-    load_cryptoauthlib()
-
-    cfg = cfg_ateccx08a_i2c_default()
-
-    cfg.cfg.atcai2c.bus = 1
-
-    # Initialize the stack
-    assert atcab_init(cfg) == ATCA_SUCCESS
-
-    # Check the device locks
-    is_locked = AtcaReference(False)
-    assert atcab_is_locked(0, is_locked) == ATCA_SUCCESS
-    config_zone_locked = bool(is_locked.value)
-
-    assert atcab_is_locked(1, is_locked) == ATCA_SUCCESS
-    data_zone_locked = bool(is_locked.value)
-
-    #Load the public key
-    if data_zone_locked:
-        public_key = bytearray(64)
-        assert atcab_get_pubkey(0, public_key) == ATCA_SUCCESS
-
-        public_key =  bytearray.fromhex('3059301306072A8648CE3D020106082A8648CE3D03010703420004') + bytes(public_key)
-        public_key = base64.b64encode(public_key).decode('ascii')
-        public_key = ''.join(public_key[i:i+64] + '\n' for i in range(0,len(public_key),64))
-        public_key = '-----BEGIN PUBLIC KEY-----\n' + public_key + '-----END PUBLIC KEY-----'
+def _get_device_info():
+    if ecc608_i2c_address is None:
+        return None
     else:
-        raise Exception
-    atcab_release()
-    return public_key
+        device_info = {}
+        device_info['device_id'] = 'enviro-{}'.format(ecc608_serial())
+        device_info['pub_key'] = ecc608_public_key()
+        return device_info
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GCP arguments')
@@ -117,9 +91,11 @@ if __name__ == '__main__':
     parser.add_argument('--project', help='GCP project id')
     parser.add_argument('--registry', help='IoT registry id ')
     parser.add_argument('--region', help='Region of the IoT core registry')
-    parser.add_argument('--device', help='id of the device to create')
     args = parser.parse_args()
-    hardware_public_key = _get_hardware_publis_key()
+    device_info = _get_device_info()
+    if not device_info:
+        print("Board not found")
+        sys.exit(1)
     _create_es256_device(
-            args.service_account_json, args.project, args.region, args.registry,
-            args.device, hardware_public_key)
+            args.service_account_json, args.project, args.region, args.registry, device_info)
+
